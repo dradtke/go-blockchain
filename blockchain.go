@@ -20,67 +20,6 @@ import (
 	"time"
 )
 
-// Block represents a single piece of data in the blockchain.
-type Block struct {
-	prevHash  []byte
-	timestamp time.Time
-	nonce     uint32
-	data      []byte
-}
-
-// NewBlock constructs a new block from the previous block's hash and an
-// arbitrary chunk of data.
-func NewBlock(prevHash, data []byte) *Block {
-	const initialNonce = 0
-	timestamp := time.Now()
-	return &Block{
-		prevHash:  prevHash,
-		timestamp: timestamp,
-		nonce:     initialNonce,
-		data:      data,
-	}
-}
-
-// Hash calculates the block's hash. It uses the previous block's hash along
-// with this block's timestamp, nonce, and data.
-func (b Block) Hash() []byte {
-	v := make([]byte, 4)
-	binary.LittleEndian.PutUint32(v, b.nonce)
-
-	hasher := sha256.New()
-	hasher.Write(b.prevHash)
-	hasher.Write(mustBinary(b.timestamp.MarshalBinary()))
-	hasher.Write(v)
-	hasher.Write(b.data)
-	return hasher.Sum(nil)
-}
-
-// HashString returns the hex-encoded result of Hash().
-func (b Block) HashString() string {
-	return hex.EncodeToString(b.Hash())
-}
-
-// Timestamp returns the block's timestamp.
-func (b Block) Timestamp() time.Time {
-	return b.timestamp
-}
-
-// Data returns the block's data.
-func (b Block) Data() []byte {
-	return b.data
-}
-
-// Mine attempts to make this block valid by searching for a nonce value that
-// will qualify as proof-of-work. Once it succeeds, it returns the resulting
-// hex-encoded hash.
-func (b *Block) Mine(difficulty int) string {
-	target := strings.Repeat("0", difficulty)
-	for !strings.HasPrefix(b.HashString(), target) {
-		b.nonce++
-	}
-	return b.HashString()
-}
-
 // Blockchain represents the blockchain.
 type Blockchain struct {
 	l           *list.List
@@ -97,14 +36,21 @@ func New(difficulty int) Blockchain {
 	}
 }
 
-// Add adds a new block to the chain, returning a reference to it so that
-// it can be mined.
-func (c Blockchain) Add(data []byte) *Block {
+// Add adds a new block to the chain, returning a reference to it.
+func (c Blockchain) NewBlock() *Block {
+	const initialNonce = 0
+
 	var prevHash []byte
-	if c.l.Len() > 0 {
-		prevHash = c.l.Back().Value.(*Block).Hash()
+	if prevBlock := c.l.Back(); prevBlock != nil {
+		prevHash = prevBlock.Value.(*Block).Hash()
 	}
-	block := NewBlock(prevHash, data)
+	block := &Block{
+		prevHash:    prevHash,
+		timestamp:   time.Now(),
+		nonce:       initialNonce,
+		difficulty:  c.difficulty,
+		proofPrefix: c.proofPrefix,
+	}
 	c.l.PushBack(block)
 	return block
 }
@@ -142,6 +88,102 @@ func (c Blockchain) Valid() bool {
 	return true
 }
 
+func (c Blockchain) ForEach(f func(*Block)) {
+	for e := c.l.Front(); e != nil; e = e.Next() {
+		block := e.Value.(*Block)
+		f(block)
+	}
+}
+
+// Block represents a single piece of data in the blockchain.
+type Block struct {
+	prevHash     []byte
+	timestamp    time.Time
+	nonce        uint32
+	transactions []Transaction
+	difficulty   int
+	proofPrefix  string
+}
+
+func (b Block) String() string {
+	const idSize = 6
+
+	hashString := b.HashString()
+	var buf bytes.Buffer
+	buf.WriteString("block " + hashString + "\n")
+	buf.WriteString(strings.Repeat("=", len("block "+hashString)) + "\n")
+	for _, transaction := range b.transactions {
+		from, to := transaction.Sender(), transaction.Receiver()
+		shortFrom := from[:idSize] + "..." + from[len(from)-idSize:]
+		shortTo := to[:idSize] + "..." + to[len(to)-idSize:]
+		buf.WriteString(shortFrom + " -> " + shortTo + ": ")
+		buf.Write(transaction.data)
+		buf.WriteString("\n")
+	}
+	buf.WriteString("\n")
+	return buf.String()
+}
+
+func (b *Block) SendTransaction(from Identity, to *ecdsa.PublicKey, data []byte) error {
+	random := make([]byte, 4)
+	if _, err := rand.Read(random); err != nil {
+		return err
+	}
+	t := Transaction{
+		sender:   &from.signer.PublicKey,
+		receiver: to,
+		data:     data,
+		random:   random,
+	}
+	if err := t.Sign(from); err != nil {
+		return errors.New("blockchain.SendTransaction: failed to sign transaction: " + err.Error())
+	}
+	b.transactions = append(b.transactions, t)
+	return nil
+}
+
+// Hash calculates the block's hash. It uses the previous block's hash along
+// with this block's timestamp, nonce, and data.
+func (b Block) Hash() []byte {
+	v := make([]byte, 4)
+	binary.LittleEndian.PutUint32(v, b.nonce)
+
+	hasher := sha256.New()
+	hasher.Write(b.prevHash)
+	hasher.Write(mustBinary(b.timestamp.MarshalBinary()))
+	hasher.Write(v)
+	// NOTE: this part may need to be reworked, e.g. to use a merkle tree
+	for _, t := range b.transactions {
+		hasher.Write(t.Hash())
+	}
+	return hasher.Sum(nil)
+}
+
+// HashString returns the hex-encoded result of Hash().
+func (b Block) HashString() string {
+	return hex.EncodeToString(b.Hash())
+}
+
+// Timestamp returns the block's timestamp.
+func (b Block) Timestamp() time.Time {
+	return b.timestamp
+}
+
+// Data returns the block's transactions.
+func (b Block) Transactions() []Transaction {
+	return b.transactions
+}
+
+// Mine attempts to make this block valid by searching for a nonce value that
+// will qualify as proof-of-work. Once it succeeds, it returns the resulting
+// hex-encoded hash.
+func (b *Block) Mine() string {
+	for !strings.HasPrefix(b.HashString(), b.proofPrefix) {
+		b.nonce++
+	}
+	return b.HashString()
+}
+
 // Identity represents a user of the blockchain. It's analogous to bitcoin's
 // wallet in that it is used to sign messages.
 type Identity struct {
@@ -167,26 +209,12 @@ func (i Identity) PublicKey() *ecdsa.PublicKey {
 	return &i.signer.PublicKey
 }
 
-// Transaction represents a (potentially) signed message on the blockchain.
+// Transaction represents a signed message on the blockchain.
 type Transaction struct {
 	sender, receiver *ecdsa.PublicKey
 	// random is a random sequence of bytes intended to reduce the chances of hash collisions
 	data, random []byte
 	sig1, sig2   *big.Int
-}
-
-// NewTransaction constructs a new message from one identity to another.
-func NewTransaction(from, to *ecdsa.PublicKey, data []byte) Transaction {
-	random := make([]byte, 4)
-	if _, err := rand.Read(random); err != nil {
-		panic(err)
-	}
-	return Transaction{
-		sender:   from,
-		receiver: to,
-		data:     data,
-		random:   random,
-	}
 }
 
 // Hash returns this transaction's hash, which serves as an identifier.
@@ -230,9 +258,9 @@ func (t *Transaction) Sign(identity Identity) error {
 	return nil
 }
 
-// Verify returns true if the transaction was signed and could be verified,
+// Signed returns true if the transaction was signed and could be verified,
 // otherwise false.
-func (t *Transaction) Verify() bool {
+func (t *Transaction) Signed() bool {
 	if t.sig1 == nil || t.sig2 == nil {
 		return false
 	}
