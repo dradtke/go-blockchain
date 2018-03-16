@@ -1,3 +1,7 @@
+// Package blockchain implements a simple blockchain.
+//
+// The design is inspired by this post on how to build one in Java:
+// https://medium.com/programmers-blockchain/create-simple-blockchain-java-tutorial-from-scratch-6eeed3cb03fa
 package blockchain
 
 import (
