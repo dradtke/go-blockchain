@@ -85,6 +85,7 @@ func (c Blockchain) Valid() bool {
 	return true
 }
 
+// ForEach calls f once with each block on the chain.
 func (c Blockchain) ForEach(f func(*Block)) {
 	for e := c.l.Front(); e != nil; e = e.Next() {
 		block := e.Value.(*Block)
@@ -102,6 +103,8 @@ type Block struct {
 	proofPrefix  string
 }
 
+// String returns a readable version of this block, including all of its
+// transactions.
 func (b Block) String() string {
 	const idSize = 6
 
@@ -121,6 +124,9 @@ func (b Block) String() string {
 	return buf.String()
 }
 
+// SendTransaction sends a transaction from the identity "from" to the public
+// key "to".  The transaction is automatically signed, returning an error if
+// signing fails.
 func (b *Block) SendTransaction(from Identity, to *ecdsa.PublicKey, data []byte) error {
 	random := make([]byte, 4)
 	if _, err := rand.Read(random); err != nil {
