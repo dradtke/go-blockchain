@@ -59,3 +59,46 @@ func TestMining(t *testing.T) {
 		t.Error("blockchain is not valid")
 	}
 }
+
+func TestSign(t *testing.T) {
+	me, you := mustIdentity(blockchain.NewIdentity()), mustIdentity(blockchain.NewIdentity())
+	transaction := blockchain.NewTransaction(
+		me.PublicKey(),
+		you.PublicKey(),
+		[]byte("secret message"),
+	)
+
+	t.Logf("message from %s to %s: %s", transaction.Sender(), transaction.Receiver(), string(transaction.Data()))
+
+	if transaction.Verify() {
+		t.Error("transaction verified before signature")
+	}
+	if err := transaction.Sign(me); err != nil {
+		t.Errorf("failed to sign transaction: %s", err)
+	}
+	if !transaction.Verify() {
+		t.Error("failed to verify transaction")
+	}
+}
+
+func TestSignByNonSender(t *testing.T) {
+	me, you := mustIdentity(blockchain.NewIdentity()), mustIdentity(blockchain.NewIdentity())
+	transaction := blockchain.NewTransaction(
+		me.PublicKey(),
+		you.PublicKey(),
+		[]byte("secret message"),
+	)
+
+	if err := transaction.Sign(you); err == nil {
+		t.Error("shouldn't be able to sign transaction as non-sender")
+	} else if err.Error() != "can't sign transaction unless you're the sender" {
+		t.Errorf("unexpected error: %s", err)
+	}
+}
+
+func mustIdentity(identity blockchain.Identity, err error) blockchain.Identity {
+	if err != nil {
+		panic(err)
+	}
+	return identity
+}
